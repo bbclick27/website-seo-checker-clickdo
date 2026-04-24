@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const { url } = req.query;
+  const { url, keyword } = req.query;
 
   if (!url) {
     return res.status(400).json({ error: "URL is required" });
@@ -14,38 +14,91 @@ export default async function handler(req, res) {
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const startTime = Date.now();
 
     const response = await fetch(targetUrl, {
-      method: "GET",
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Accept":
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      signal: controller.signal,
+        "User-Agent": "Mozilla/5.0 Website SEO Checker by ClickDo",
+        "Accept": "text/html"
+      }
     });
 
-    clearTimeout(timeout);
+    const loadTime = Date.now() - startTime;
 
     if (!response.ok) {
       return res.status(400).json({
-        error: "Website blocked the request or returned an error",
+        error: "Website blocked the request or returned an error"
       });
     }
 
     const html = await response.text();
+    const pageSizeKB = Math.round(Buffer.byteLength(html, "utf8") / 1024);
 
-    // SAFE PARSING
-    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
-    const metaMatch = html.match(
-      /<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i
+    const getMatch = (regex) => {
+      const match = html.match(regex);
+      return match ? match[1].trim().replace(/\s+/g, " ") : "";
+    };
+
+    const title = getMatch(/<title[^>]*>(.*?)<\/title>/is);
+
+    const metaDescription = getMatch(
+      /<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["'][^>]*>/is
     );
 
-    const h1Matches = html.match(/<h1[^>]*>/gi) || [];
-    const h2Matches = html.match(/<h2[^>]*>/gi) || [];
+    const canonical = getMatch(
+      /<link[^>]*rel=["']canonical["'][^>]*href=["'](.*?)["'][^>]*>/is
+    );
+
+    const publishedDate =
+      getMatch(/<meta[^>]*property=["']article:published_time["'][^>]*content=["'](.*?)["'][^>]*>/is) ||
+      getMatch(/<meta[^>]*name=["']date["'][^>]*content=["'](.*?)["'][^>]*>/is) ||
+      getMatch(/<time[^>]*datetime=["'](.*?)["'][^>]*>/is);
+
+    const h1Matches = html.match(/<h1[^>]*>[\s\S]*?<\/h1>/gi) || [];
+    const h2Matches = html.match(/<h2[^>]*>[\s\S]*?<\/h2>/gi) || [];
+
+    const imgMatches = html.match(/<img[^>]*>/gi) || [];
+    const imgAltMatches = html.match(/<img[^>]*alt=["'][^"']+["'][^>]*>/gi) || [];
+
+    const jsonLdMatches =
+      html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+
+    let schemaTypes = [];
+
+    jsonLdMatches.forEach((block) => {
+      const jsonText = block
+        .replace(/<script[^>]*type=["']application\/ld\+json["'][^>]*>/i, "")
+        .replace(/<\/script>/i, "")
+        .trim();
+
+      try {
+        const parsed = JSON.parse(jsonText);
+
+        const collectTypes = (item) => {
+          if (!item) return;
+
+          if (Array.isArray(item)) {
+            item.forEach(collectTypes);
+          } else if (typeof item === "object") {
+            if (item["@type"]) {
+              if (Array.isArray(item["@type"])) {
+                schemaTypes.push(...item["@type"]);
+              } else {
+                schemaTypes.push(item["@type"]);
+              }
+            }
+
+            if (item["@graph"]) {
+              collectTypes(item["@graph"]);
+            }
+          }
+        };
+
+        collectTypes(parsed);
+      } catch {}
+    });
+
+    schemaTypes = [...new Set(schemaTypes)];
 
     const cleanText = html
       .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -54,31 +107,116 @@ export default async function handler(req, res) {
       .replace(/\s+/g, " ")
       .trim();
 
-    const wordCount = cleanText ? cleanText.split(" ").length : 0;
+    const words = cleanText ? cleanText.split(" ") : [];
+    const wordCount = words.length;
 
-    const title = titleMatch ? titleMatch[1].trim() : null;
-    const meta = metaMatch ? metaMatch[1].trim() : null;
+    let keywordDensity = "Not checked";
+    let keywordCount = 0;
+
+    if (keyword) {
+      const safeKeyword = keyword.toLowerCase().trim();
+      const textLower = cleanText.toLowerCase();
+
+      keywordCount = (textLower.match(new RegExp(safeKeyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+      keywordDensity = wordCount > 0 ? ((keywordCount / wordCount) * 100).toFixed(2) + "%" : "0%";
+    }
+
+    const issues = [];
+
+    if (!title) issues.push("Meta title is missing.");
+    if (title && (title.length < 30 || title.length > 60)) issues.push("Meta title length should ideally be 30 to 60 characters.");
+
+    if (!metaDescription) issues.push("Meta description is missing.");
+    if (metaDescription && (metaDescription.length < 120 || metaDescription.length > 160)) issues.push("Meta description length should ideally be 120 to 160 characters.");
+
+    if (h1Matches.length === 0) issues.push("H1 tag is missing.");
+    if (h1Matches.length > 1) issues.push("More than one H1 tag found.");
+
+    if (h2Matches.length === 0) issues.push("No H2 headings found.");
+    if (wordCount < 300) issues.push("Page content appears too thin.");
+
+    if (imgMatches.length > 0 && imgAltMatches.length < imgMatches.length) {
+      issues.push("Some images are missing ALT text.");
+    }
+
+    if (!canonical) issues.push("Canonical URL is missing.");
+    if (jsonLdMatches.length === 0) issues.push("No structured data found.");
 
     let score = 0;
+    const breakdown = {
+      title: 0,
+      metaDescription: 0,
+      headings: 0,
+      content: 0,
+      images: 0,
+      structuredData: 0,
+      canonical: 0,
+      performance: 0
+    };
 
-    if (title) score += 25;
-    if (meta) score += 25;
-    if (h1Matches.length > 0) score += 25;
-    if (wordCount > 300) score += 25;
+    if (title) breakdown.title += 10;
+    if (title.length >= 30 && title.length <= 60) breakdown.title += 10;
+
+    if (metaDescription) breakdown.metaDescription += 10;
+    if (metaDescription.length >= 120 && metaDescription.length <= 160) breakdown.metaDescription += 10;
+
+    if (h1Matches.length === 1) breakdown.headings += 10;
+    if (h2Matches.length > 0) breakdown.headings += 10;
+
+    if (wordCount >= 300) breakdown.content += 10;
+    if (wordCount >= 800) breakdown.content += 10;
+
+    if (imgMatches.length === 0 || imgAltMatches.length === imgMatches.length) breakdown.images += 10;
+
+    if (jsonLdMatches.length > 0) breakdown.structuredData += 10;
+    if (canonical) breakdown.canonical += 10;
+
+    if (loadTime < 2000) breakdown.performance += 10;
+    else if (loadTime < 4000) breakdown.performance += 5;
+
+    score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+
+    const estimatedDA = Math.min(
+      100,
+      Math.round(
+        (wordCount / 100) +
+        (schemaTypes.length * 5) +
+        (h2Matches.length * 1.5) +
+        (canonical ? 10 : 0)
+      )
+    );
 
     return res.status(200).json({
+      url: targetUrl,
       score,
-      title: title ? "Found" : "Missing",
-      metaDescription: meta ? "Found" : "Missing",
+      breakdown,
+      title: title || "Missing",
+      titleLength: title.length,
+      metaDescription: metaDescription || "Missing",
+      metaLength: metaDescription.length,
+      publishedDate: publishedDate || "Not found",
+      canonical: canonical || "Missing",
       h1Count: h1Matches.length,
       h2Count: h2Matches.length,
       wordCount,
+      imageCount: imgMatches.length,
+      imagesWithAlt: imgAltMatches.length,
+      structuredDataBlocks: jsonLdMatches.length,
+      schemaTypes: schemaTypes.length ? schemaTypes : ["Not found"],
+      keyword: keyword || "Not checked",
+      keywordCount,
+      keywordDensity,
+      pageSpeed: {
+        responseTimeMs: loadTime,
+        pageSizeKB
+      },
+      estimatedDA,
+      issues: issues.length ? issues : ["No major basic SEO issues found."]
     });
 
   } catch (error) {
     return res.status(500).json({
-      error:
-        "Failed to fetch website. This site may block bots or timed out.",
+      error: "Failed to fetch website. This website may block crawlers or timed out."
     });
   }
 }
