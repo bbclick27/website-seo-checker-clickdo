@@ -143,38 +143,58 @@ export default async function handler(req, res) {
     if (jsonLdMatches.length === 0) issues.push("No structured data found.");
 
     let score = 0;
-    const breakdown = {
-      title: 0,
-      metaDescription: 0,
-      headings: 0,
-      content: 0,
-      images: 0,
-      structuredData: 0,
-      canonical: 0,
-      performance: 0
-    };
+const breakdown = {
+  title: 0,
+  metaDescription: 0,
+  headings: 0,
+  content: 0,
+  images: 0,
+  structuredData: 0,
+  canonical: 0,
+  performance: 0
+};
 
-    if (title) breakdown.title += 10;
-    if (title.length >= 30 && title.length <= 60) breakdown.title += 10;
+// 🔴 TITLE (STRICT)
+if (title) breakdown.title += 5;
+if (title && title.length >= 50 && title.length <= 60) breakdown.title += 10;
 
-    if (metaDescription) breakdown.metaDescription += 10;
-    if (metaDescription.length >= 120 && metaDescription.length <= 160) breakdown.metaDescription += 10;
+// 🔴 META DESCRIPTION (STRICT)
+if (metaDescription) breakdown.metaDescription += 5;
+if (metaDescription && metaDescription.length >= 140 && metaDescription.length <= 160) breakdown.metaDescription += 10;
 
-    if (h1Matches.length === 1) breakdown.headings += 10;
-    if (h2Matches.length > 0) breakdown.headings += 10;
+// 🔴 HEADINGS
+if (h1Matches.length === 1) breakdown.headings += 10;
+if (h2Matches.length >= 2) breakdown.headings += 5;
 
-    if (wordCount >= 300) breakdown.content += 10;
-    if (wordCount >= 800) breakdown.content += 10;
+// 🔴 CONTENT (STRICT)
+if (wordCount >= 500) breakdown.content += 5;
+if (wordCount >= 1000) breakdown.content += 5;
+if (wordCount >= 1500) breakdown.content += 5;
 
-    if (imgMatches.length === 0 || imgAltMatches.length === imgMatches.length) breakdown.images += 10;
+// 🔴 IMAGES (ALT RATIO)
+if (imgMatches.length > 0) {
+  let altRatio = imgAltMatches.length / imgMatches.length;
+  if (altRatio > 0.8) breakdown.images += 10;
+  else if (altRatio > 0.5) breakdown.images += 5;
+}
 
-    if (jsonLdMatches.length > 0) breakdown.structuredData += 10;
-    if (canonical) breakdown.canonical += 10;
+// 🔴 STRUCTURED DATA
+if (jsonLdMatches.length > 0) breakdown.structuredData += 10;
 
-    if (loadTime < 2000) breakdown.performance += 10;
-    else if (loadTime < 4000) breakdown.performance += 5;
+// 🔴 CANONICAL
+if (canonical) breakdown.canonical += 5;
 
-    score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+// 🔴 PERFORMANCE (STRICT)
+if (loadTime < 1500) breakdown.performance += 10;
+else if (loadTime < 3000) breakdown.performance += 5;
+
+if (pageSizeKB < 500) breakdown.performance += 5;
+
+// ✅ FINAL SCORE
+score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+
+// ✅ HARD LIMIT
+score = Math.min(score, 100);
 
     const estimatedDA = Math.min(
       100,
