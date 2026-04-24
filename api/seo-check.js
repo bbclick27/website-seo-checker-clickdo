@@ -14,32 +14,50 @@ export default async function handler(req, res) {
   }
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
     const response = await fetch(targetUrl, {
+      method: "GET",
       headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept":
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
 
     if (!response.ok) {
       return res.status(400).json({
-        error: "Website blocked request or returned error"
+        error: "Website blocked the request or returned an error",
       });
     }
 
     const html = await response.text();
 
-    // SAFE MATCHES
+    // SAFE PARSING
     const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
-    const metaMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i);
+    const metaMatch = html.match(
+      /<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i
+    );
+
     const h1Matches = html.match(/<h1[^>]*>/gi) || [];
     const h2Matches = html.match(/<h2[^>]*>/gi) || [];
 
-    const text = html.replace(/<[^>]*>/g, " ");
-    const words = text.split(/\s+/).filter(w => w.length > 0);
-    const wordCount = words.length;
+    const cleanText = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    const title = titleMatch ? titleMatch[1] : null;
-    const meta = metaMatch ? metaMatch[1] : null;
+    const wordCount = cleanText ? cleanText.split(" ").length : 0;
+
+    const title = titleMatch ? titleMatch[1].trim() : null;
+    const meta = metaMatch ? metaMatch[1].trim() : null;
 
     let score = 0;
 
@@ -54,12 +72,13 @@ export default async function handler(req, res) {
       metaDescription: meta ? "Found" : "Missing",
       h1Count: h1Matches.length,
       h2Count: h2Matches.length,
-      wordCount
+      wordCount,
     });
 
   } catch (error) {
     return res.status(500).json({
-      error: "Failed to fetch website. Try another URL."
+      error:
+        "Failed to fetch website. This site may block bots or timed out.",
     });
   }
 }
